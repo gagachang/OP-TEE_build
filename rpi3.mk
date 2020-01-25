@@ -149,9 +149,11 @@ linux-cleaner: linux-cleaner-common
 # OP-TEE
 ################################################################################
 OPTEE_OS_COMMON_FLAGS += PLATFORM=rpi3
+OPTEE_OS_COMMON_FLAGS += CFG_RPI3_GPIO=y
 optee-os: optee-os-common
 
 OPTEE_OS_CLEAN_COMMON_FLAGS += PLATFORM=rpi3
+OPTEE_OS_CLEAN_COMMON_FLAGS += CFG_RPI3_GPIO=y
 optee-os-clean: optee-os-clean-common
 
 ################################################################################
