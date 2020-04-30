@@ -49,7 +49,6 @@ endif
 ################################################################################
 # Check coherency of compilation mode
 ################################################################################
-
 ifneq ($(COMPILE_NS_USER),)
 ifeq ($(COMPILE_NS_KERNEL),)
 $(error COMPILE_NS_KERNEL must be defined as COMPILE_NS_USER=$(COMPILE_NS_USER) is defined)
@@ -107,8 +106,6 @@ endif
 ################################################################################
 # set the compiler when COMPILE_xxx are defined
 ################################################################################
-
-
 ifeq ($(COMPILE_LEGACY),)
 CROSS_COMPILE_NS_USER   ?= "$(CCACHE)$(AARCH$(COMPILE_NS_USER)_CROSS_COMPILE)"
 CROSS_COMPILE_NS_KERNEL ?= "$(CCACHE)$(AARCH$(COMPILE_NS_KERNEL)_CROSS_COMPILE)"
@@ -248,7 +245,7 @@ buildroot: optee-os
 	@(cd .. && python build/br-ext/scripts/make_def_config.py \
 		--br buildroot --out out-br --br-ext build/br-ext \
 		--top-dir "$(ROOT)" \
-		--br-defconfig build/br-ext/configs/optee_$(BUILDROOT_ARCH) \
+		--br-defconfig build/br-ext/configs/imx6q-sabrelite \
 		--br-defconfig build/br-ext/configs/optee_generic \
 		--br-defconfig build/br-ext/configs/$(BUILDROOT_TOOLCHAIN) \
 		$(DEFCONFIG_GDBSERVER) \
@@ -405,8 +402,8 @@ optee-os-clean-common: xtest-clean-common optee-examples-clean-common
 	$(MAKE) -C $(OPTEE_OS_PATH) $(OPTEE_OS_CLEAN_COMMON_FLAGS) clean
 
 OPTEE_CLIENT_COMMON_FLAGS ?= CROSS_COMPILE=$(CROSS_COMPILE_NS_USER) \
-	CFG_TEE_BENCHMARK=$(CFG_TEE_BENCHMARK) \
-	CFG_TA_TEST_PATH=y
+			     CFG_TEE_BENCHMARK=$(CFG_TEE_BENCHMARK) \
+			     CFG_TA_TEST_PATH=y
 
 .PHONY: optee-client-common
 optee-client-common:
