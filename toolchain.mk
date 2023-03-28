@@ -36,8 +36,8 @@ define build_toolchain
 		--br-defconfig build/br-ext/configs/sdk-$1 \
 		--br-defconfig build/br-ext/configs/sdk-common \
 		--make-cmd $(MAKE))
-	@$(MAKE) -C ../out-$1-sdk clean
-	@$(MAKE) -C ../out-$1-sdk sdk
+	+@$(MAKE) -C ../out-$1-sdk clean
+	+@$(MAKE) -C ../out-$1-sdk sdk
 	@tar xf ../out-$1-sdk/images/$3-buildroot-linux-$4_sdk-buildroot.tar.gz \
 		-C $2 --strip-components=1
 	@touch $2/.done
@@ -46,13 +46,13 @@ endef
 ifeq ($(UNAME_M),x86_64)
 AARCH32_PATH 			?= $(TOOLCHAIN_ROOT)/aarch32
 AARCH32_CROSS_COMPILE 		?= $(AARCH32_PATH)/bin/arm-linux-gnueabihf-
-AARCH32_GCC_VERSION 		?= gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf
-SRC_AARCH32_GCC 		?= https://developer.arm.com/-/media/Files/downloads/gnu-a/10.2-2020.11/binrel/$(AARCH32_GCC_VERSION).tar.xz
+AARCH32_GCC_VERSION 		?= arm-gnu-toolchain-11.3.rel1-x86_64-arm-none-linux-gnueabihf
+SRC_AARCH32_GCC 		?= https://developer.arm.com/-/media/Files/downloads/gnu/11.3.rel1/binrel/$(AARCH32_GCC_VERSION).tar.xz
 
 AARCH64_PATH 			?= $(TOOLCHAIN_ROOT)/aarch64
 AARCH64_CROSS_COMPILE 		?= $(AARCH64_PATH)/bin/aarch64-linux-gnu-
-AARCH64_GCC_VERSION 		?= gcc-arm-10.2-2020.11-x86_64-aarch64-none-linux-gnu
-SRC_AARCH64_GCC 		?= https://developer.arm.com/-/media/Files/downloads/gnu-a/10.2-2020.11/binrel/$(AARCH64_GCC_VERSION).tar.xz
+AARCH64_GCC_VERSION 		?= arm-gnu-toolchain-11.3.rel1-x86_64-aarch64-none-linux-gnu
+SRC_AARCH64_GCC 		?= https://developer.arm.com/-/media/Files/downloads/gnu/11.3.rel1/binrel/$(AARCH64_GCC_VERSION).tar.xz
 
 .PHONY: toolchains
 toolchains: aarch32 aarch64

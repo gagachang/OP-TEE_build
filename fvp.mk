@@ -52,9 +52,18 @@ else
 EDK2_BUILD		?= RELEASE
 endif
 EDK2_BIN		?= $(EDK2_PLATFORMS_PATH)/Build/ArmVExpress-FVP-AArch64/$(EDK2_BUILD)_$(EDK2_TOOLCHAIN)/FV/FVP_$(EDK2_ARCH)_EFI.fd
-FOUNDATION_PATH		?= $(ROOT)/Foundation_Platformpkg
-ifeq ($(wildcard $(FOUNDATION_PATH)),)
-$(error $(FOUNDATION_PATH) does not exist)
+FVP_USE_BASE_PLAT	?= n
+ifeq ($(FVP_USE_BASE_PLAT),y)
+FVP_PATH		?= $(ROOT)/Base_RevC_AEMvA_pkg/models/Linux64_GCC-9.3
+FVP_BIN			?= FVP_Base_RevC-2xAEMvA
+FVP_LINUX_DTB		?= $(LINUX_PATH)/arch/arm64/boot/dts/arm/fvp-base-revc.dtb
+else
+FVP_PATH		?= $(ROOT)/Foundation_Platformpkg/models/Linux64_GCC-9.3
+FVP_BIN			?= Foundation_Platform
+FVP_LINUX_DTB		?= $(LINUX_PATH)/arch/arm64/boot/dts/arm/foundation-v8-gicv3-psci.dtb
+endif
+ifeq ($(wildcard $(FVP_PATH)),)
+$(error $(FVP_PATH) does not exist)
 endif
 GRUB_PATH		?= $(ROOT)/grub
 GRUB_CONFIG_PATH	?= $(BUILD_PATH)/fvp/grub
@@ -63,8 +72,15 @@ GRUB_BIN		?= $(OUT_PATH)/bootaa64.efi
 BOOT_IMG		?= $(OUT_PATH)/boot-fat.uefi.img
 FTPM_PATH		?= $(ROOT)/ms-tpm-20-ref/Samples/ARM32-FirmwareTPM/optee_ta
 
-# Build ancillary components to access fTPM if Measured Boot is enabled.
 ifeq ($(MEASURED_BOOT),y)
+# By default enable FTPM for backwards compatibility.
+MEASURED_BOOT_FTPM ?= y
+else
+$(call force,MEASURED_BOOT_FTPM,n,requires MEASURED_BOOT enabled)
+endif
+
+# Build ancillary components to access fTPM if Measured Boot is enabled.
+ifeq ($(MEASURED_BOOT_FTPM),y)
 DEFCONFIG_FTPM ?= --br-defconfig build/br-ext/configs/ftpm_optee
 DEFCONFIG_TPM_MODULE ?= --br-defconfig build/br-ext/configs/linux_ftpm
 DEFCONFIG_TSS ?= --br-defconfig build/br-ext/configs/tss
@@ -86,6 +102,35 @@ $(OUT_PATH):
 	mkdir -p $@
 
 ################################################################################
+# Shared folder
+################################################################################
+# Enable accessing the host directory FVP_VIRTFS_HOST_DIR from the FVP.
+# The shared folder can be mounted in the following ways:
+#  - Run 'mount -t 9p -o trans=virtio,version=9p2000.L FM <mount point>' or,
+#  - enable FVP_VIRTFS_AUTOMOUNT.
+# The latter will use the Buildroot post-build script to add an entry to the
+# target's /etc/fstab, mounting the shared directory to FVP_VIRTFS_MOUNTPOINT
+# on the FVP.
+# Note: the post-build script can only append to fstab. If FVP_VIRTFS_AUTOMOUNT
+# is changed from "y" to "n", run 'rm -r ../out-br/build/skeleton-init-sysv' so
+# the target's fstab will be replaced with the unmodified original again.
+FVP_VIRTFS_ENABLE	?= n
+FVP_VIRTFS_HOST_DIR	?= $(ROOT)
+FVP_VIRTFS_AUTOMOUNT	?= n
+FVP_VIRTFS_MOUNTPOINT	?= /mnt/host
+
+ifeq ($(FVP_VIRTFS_AUTOMOUNT),y)
+$(call force,FVP_VIRTFS_ENABLE,y,required by FVP_VIRTFS_AUTOMOUNT)
+endif
+
+ifneq ($(FVP_USE_BASE_PLAT),y)
+$(call force,FVP_VIRTFS_ENABLE,n,only supported on FVP Base Platform)
+endif
+
+BR2_ROOTFS_POST_BUILD_SCRIPT = $(ROOT)/build/br-ext/board/fvp/post-build.sh
+BR2_ROOTFS_POST_SCRIPT_ARGS = "$(FVP_VIRTFS_AUTOMOUNT) $(FVP_VIRTFS_MOUNTPOINT)"
+
+################################################################################
 # ARM Trusted Firmware
 ################################################################################
 TF_A_EXPORTS ?= \
@@ -102,7 +147,8 @@ TF_A_FLAGS ?= \
 	SPD=opteed
 
 ifneq ($(MEASURED_BOOT),y)
-	TF_A_FLAGS += DEBUG=$(DEBUG)
+	TF_A_FLAGS += DEBUG=$(DEBUG) \
+		          MEASURED_BOOT=0
 else
 	TF_A_FLAGS += DEBUG=0 \
 		      MBEDTLS_DIR=$(ROOT)/mbedtls  \
@@ -148,7 +194,7 @@ LINUX_DEFCONFIG_COMMON_FILES := \
 
 .PHONY: linux-ftpm-module
 linux-ftpm-module: linux
-ifeq ($(MEASURED_BOOT),y)
+ifeq ($(MEASURED_BOOT_FTPM),y)
 linux-ftpm-module:
 	$(MAKE) -C $(LINUX_PATH) $(LINUX_COMMON_FLAGS) M=drivers/char/tpm  \
 		modules_install INSTALL_MOD_PATH=$(LINUX_PATH)
@@ -238,7 +284,7 @@ boot-img: grub buildroot
 	rm -f $(BOOT_IMG)
 	mformat -i $(BOOT_IMG) -n 64 -h 255 -T 131072 -v "BOOT IMG" -C ::
 	mcopy -i $(BOOT_IMG) $(LINUX_PATH)/arch/arm64/boot/Image ::
-	mcopy -i $(BOOT_IMG) $(LINUX_PATH)/arch/arm64/boot/dts/arm/foundation-v8-gicv3-psci.dtb ::
+	mcopy -i $(BOOT_IMG) $(FVP_LINUX_DTB) ::/fvp.dtb
 	mmd -i $(BOOT_IMG) ::/EFI
 	mmd -i $(BOOT_IMG) ::/EFI/BOOT
 	mcopy -i $(BOOT_IMG) $(ROOT)/out-br/images/rootfs.cpio.gz ::/initrd.img
@@ -256,9 +302,22 @@ boot-img-clean:
 run: all
 	$(MAKE) run-only
 
-run-only:
-	@cd $(FOUNDATION_PATH); \
-	$(FOUNDATION_PATH)/models/Linux64_GCC-6.4/Foundation_Platform \
+ifeq ($(FVP_USE_BASE_PLAT),y)
+FVP_ARGS ?= \
+	-C bp.ve_sysregs.exit_on_shutdown=1 \
+	-C cache_state_modelled=0 \
+	-C pctl.startup=0.0.0.0 \
+	-C cluster0.NUM_CORES=4 \
+	-C cluster1.NUM_CORES=4 \
+	-C bp.secure_memory=1 \
+	-C bp.secureflashloader.fname=$(TF_A_PATH)/build/fvp/$(TF_A_BUILD)/bl1.bin \
+	-C bp.flashloader0.fname=$(TF_A_PATH)/build/fvp/$(TF_A_BUILD)/fip.bin \
+	-C bp.virtioblockdevice.image_path=$(BOOT_IMG)
+ifeq ($(FVP_VIRTFS_ENABLE),y)
+	FVP_ARGS += -C bp.virtiop9device.root_path=$(FVP_VIRTFS_HOST_DIR)
+endif
+else
+FVP_ARGS ?= \
 	--arm-v8.0 \
 	--cores=4 \
 	--secure-memory \
@@ -267,3 +326,7 @@ run-only:
 	--data="$(TF_A_PATH)/build/fvp/$(TF_A_BUILD)/bl1.bin"@0x0 \
 	--data="$(TF_A_PATH)/build/fvp/$(TF_A_BUILD)/fip.bin"@0x8000000 \
 	--block-device=$(BOOT_IMG)
+endif
+
+run-only:
+	$(FVP_PATH)/$(FVP_BIN) $(FVP_ARGS) $(FVP_EXTRA_ARGS)

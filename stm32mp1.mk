@@ -16,6 +16,14 @@ include common.mk
 ifeq ($(PLATFORM),stm32mp1-157A_DK1)
 BREXT_FLAVOR		= STM32MP157A-DK1
 STM32MP1_DTS_BASENAME	= stm32mp157a-dk1
+else ifeq ($(PLATFORM),stm32mp1-157A_DHCOR_AVENGER96)
+BREXT_FLAVOR		= STM32MP157A-DHCOR-AVENGER96
+STM32MP1_DTS_BASENAME	= stm32mp157a-dhcor-avenger96
+STM32MP1_DTS_U_BOOT		= stm32mp15xx-dhcor-avenger96
+else ifeq ($(PLATFORM),stm32mp1-157C_DHCOM_PDK2)
+BREXT_FLAVOR		= STM32MP157C-DHCOM-PDK2
+STM32MP1_DTS_BASENAME	= stm32mp157c-dhcom-pdk2
+STM32MP1_DTS_U_BOOT		= stm32mp15xx-dhcom-pdk2
 else ifeq ($(PLATFORM),stm32mp1-157C_DK2)
 BREXT_FLAVOR		= STM32MP157C-DK2
 STM32MP1_DTS_BASENAME	= stm32mp157c-dk2
@@ -29,15 +37,19 @@ else
 $(error Unknown PLATFORM $(PLATFORM))
 endif
 
+STM32MP1_DTS_U_BOOT ?= $(STM32MP1_DTS_BASENAME)
+
 ################################################################################
 # Binary images names
 ################################################################################
 
 TFA_BIN			:= tf-a-$(STM32MP1_DTS_BASENAME).stm32
-OPTEE_HEADER_BIN	:= tee-header_v2.stm32
-OPTEE_PAGER_BIN		:= tee-pager_v2.stm32
-OPTEE_PAGEABLE_BIN  	:= tee-pageable_v2.stm32
-U_BOOT_BIN		:= u-boot.stm32
+TFA_FIP_BIN		:= fip.bin
+OPTEE_HEADER_BIN	:= tee-header_v2.bin
+OPTEE_PAGER_BIN		:= tee-pager_v2.bin
+OPTEE_PAGEABLE_BIN  	:= tee-pageable_v2.bin
+U_BOOT_BIN		:= u-boot.bin
+U_BOOT_DTB		:= u-boot.dtb
 LINUX_KERNEL_BIN 	:= uImage
 LINUX_DTB_BIN		:= $(STM32MP1_DTS_BASENAME).dtb
 
@@ -47,6 +59,7 @@ LINUX_DTB_BIN		:= $(STM32MP1_DTS_BASENAME).dtb
 BINARIES_PATH		?= $(ROOT)/out/bin
 TFA_PATH		?= $(ROOT)/trusted-firmware-a
 U_BOOT_PATH		?= $(ROOT)/u-boot
+SCPFW_PATH		?= $(ROOT)/scp-firmware
 
 define install_in_binaries
 	echo "  INSTALL $(shell basename $1) to $(BINARIES_PATH)" && \
@@ -68,6 +81,10 @@ include toolchain.mk
 ################################################################################
 # OP-TEE OS
 ################################################################################
+
+# Provide scp-firmware source tree path in case CFG_SCMI_SERVER is enabled
+OPTEE_OS_COMMON_FLAGS += CFG_SCP_FIRMWARE=$(SCPFW_PATH)
+
 optee-os: optee-os-common
 	@$(call install_in_binaries,$(OPTEE_OS_PATH)/out/arm/core/$(OPTEE_HEADER_BIN))
 	@$(call install_in_binaries,$(OPTEE_OS_PATH)/out/arm/core/$(OPTEE_PAGER_BIN))
@@ -94,6 +111,7 @@ TFA_FLAGS ?= \
 	BL32_EXTRA1=$(BINARIES_PATH)/$(OPTEE_PAGER_BIN) \
 	BL32_EXTRA2=$(BINARIES_PATH)/$(OPTEE_PAGEABLE_BIN) \
 	BL33=$(BINARIES_PATH)/$(U_BOOT_BIN) \
+	BL33_CFG=$(BINARIES_PATH)/$(U_BOOT_DTB) \
 	ARM_ARCH_MAJOR=7 \
 	ARCH=aarch32 \
 	PLAT=stm32mp1 \
@@ -102,12 +120,12 @@ TFA_FLAGS ?= \
 	DEBUG=$(TFA_DEBUG) \
 	LOG_LEVEL=$(TFA_LOGLVL) \
 	STM32MP_EMMC=1 STM32MP_SDMMC=1 \
-	STM32MP_USE_STM32IMAGE=1 \
 	STM32MP_RAW_NAND=0 STM32MP_SPI_NAND=0 STM32MP_SPI_NOR=0
 
 tfa: optee-os u-boot
-	$(TFA_EXPORTS) $(MAKE) -C $(TFA_PATH) $(TFA_FLAGS) all
+	$(TFA_EXPORTS) $(MAKE) -C $(TFA_PATH) $(TFA_FLAGS) all fip
 	@$(call install_in_binaries,$(TFA_OUT)/$(TFA_BIN))
+	@$(call install_in_binaries,$(TFA_OUT)/$(TFA_FIP_BIN))
 
 tfa-clean:
 	$(TFA_EXPORTS) $(MAKE) -C $(TFA_PATH) $(TFA_FLAGS) clean
@@ -117,16 +135,11 @@ tfa-clean:
 ################################################################################
 U_BOOT_EXPORTS ?= CROSS_COMPILE="$(CCACHE)$(AARCH32_CROSS_COMPILE)"
 
-# Use stm32mp15_optee_defconfig up to U-Boot v2020.07-rc2.
-# Use stm32mp15_trusted_defconfig from v2020.07-rc3 onward.
 u-boot:
-ifneq ($(wildcard $(U_BOOT_PATH)/configs/stm32mp15_optee_defconfig),)
-	$(U_BOOT_EXPORTS) $(MAKE) -C $(U_BOOT_PATH) stm32mp15_optee_defconfig
-else
-	$(U_BOOT_EXPORTS) $(MAKE) -C $(U_BOOT_PATH) stm32mp15_trusted_defconfig
-endif
-	$(U_BOOT_EXPORTS) $(MAKE) -C $(U_BOOT_PATH) DEVICE_TREE=$(STM32MP1_DTS_BASENAME) all
+	$(U_BOOT_EXPORTS) $(MAKE) -C $(U_BOOT_PATH) stm32mp15_defconfig
+	$(U_BOOT_EXPORTS) $(MAKE) -C $(U_BOOT_PATH) DEVICE_TREE=$(STM32MP1_DTS_U_BOOT) all
 	@$(call install_in_binaries,$(U_BOOT_PATH)/$(U_BOOT_BIN))
+	@$(call install_in_binaries,$(U_BOOT_PATH)/$(U_BOOT_DTB))
 
 u-boot-clean:
 	$(U_BOOT_EXPORTS) $(MAKE) -C $(U_BOOT_PATH) clean
@@ -207,7 +220,9 @@ buildroot: copy_images_to_br
 copy_images_to_br: tfa optee-os u-boot linux
 	@mkdir -p $(ROOT)/out-br/images
 	$(call install_in_br_images,$(TFA_BIN))
+	$(call install_in_br_images,$(TFA_FIP_BIN))
 	$(call install_in_br_images,$(U_BOOT_BIN))
+	$(call install_in_br_images,$(U_BOOT_DTB))
 	$(call install_in_br_images,$(LINUX_KERNEL_BIN))
 	$(call install_in_br_images,$(LINUX_DTB_BIN))
 	$(call install_in_br_images,$(OPTEE_HEADER_BIN))

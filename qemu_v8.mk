@@ -53,6 +53,9 @@ endif
 # Option to configure Pointer Authentication for TA's
 PAUTH ?= n
 
+# Option to configure Memory Tagging Extension
+MEMTAG ?= n
+
 ################################################################################
 # Paths to git projects and various binaries
 ################################################################################
@@ -96,7 +99,7 @@ BL33_DEPS		?= edk2
 endif
 
 XEN_PATH		?= $(ROOT)/xen
-XEN_IMAGE		?= $(XEN_PATH)/xen/xen.efi
+XEN_IMAGE		?= $(ROOT)/out-br/build/xen-4.14.5/xen/xen.efi
 XEN_EXT4		?= $(BINARIES_PATH)/xen.ext4
 XEN_CFG			?= $(ROOT)/build/qemu_v8/xen/xen.cfg
 
@@ -125,8 +128,8 @@ TARGET_CLEAN		+= edk2-clean
 endif
 
 ifeq ($(XEN_BOOT),y)
-TARGET_DEPS		+= xen xen-create-image buildroot-domu
-TARGET_CLEAN		+= xen-clean buildroot-domu-clean
+TARGET_DEPS		+= xen-create-image buildroot-domu
+TARGET_CLEAN		+= buildroot-domu-clean
 endif
 
 all: $(TARGET_DEPS)
@@ -149,7 +152,7 @@ ifeq ($(TF_A_DEBUG),0)
 TF_A_LOGLVL ?= 30
 TF_A_OUT = $(TF_A_PATH)/build/qemu/release
 else
-TF_A_LOGLVL ?= 50
+TF_A_LOGLVL ?= 40
 TF_A_OUT = $(TF_A_PATH)/build/qemu/debug
 endif
 
@@ -157,6 +160,10 @@ TF_A_FLAGS ?= \
 	BL33=$(BL33_BIN) \
 	PLAT=qemu \
 	QEMU_USE_GIC_DRIVER=$(TFA_GIC_DRIVER) \
+	ENABLE_SVE_FOR_NS=1 \
+	ENABLE_SVE_FOR_SWD=1 \
+	ENABLE_SME_FOR_NS=1 \
+	ENABLE_SME_FOR_SWD=1 \
 	BL32_RAM_LOCATION=tdram \
 	DEBUG=$(TF_A_DEBUG) \
 	LOG_LEVEL=$(TF_A_LOGLVL)
@@ -185,6 +192,9 @@ endif
 
 ifeq ($(PAUTH),y)
 TF_A_FLAGS += CTX_INCLUDE_PAUTH_REGS=1
+endif
+ifeq ($(MEMTAG),y)
+TF_A_FLAGS += CTX_INCLUDE_MTE_REGS=1
 endif
 
 arm-tf: optee-os $(BL33_DEPS)
@@ -223,7 +233,7 @@ arm-tf-clean:
 # QEMU
 ################################################################################
 $(QEMU_BUILD)/config-host.mak:
-	cd $(QEMU_PATH); ./configure --target-list=aarch64-softmmu\
+	cd $(QEMU_PATH); ./configure --target-list=aarch64-softmmu --enable-slirp\
 			$(QEMU_CONFIGURE_PARAMS_COMMON)
 
 qemu: $(QEMU_BUILD)/config-host.mak
@@ -325,6 +335,10 @@ endif
 
 ifeq ($(PAUTH),y)
 OPTEE_OS_COMMON_FLAGS += CFG_TA_PAUTH=y
+OPTEE_OS_COMMON_FLAGS += CFG_CORE_PAUTH=y
+endif
+ifeq ($(MEMTAG),y)
+OPTEE_OS_COMMON_FLAGS += CFG_MEMTAG=y
 endif
 
 OPTEE_OS_COMMON_FLAGS += $(OPTEE_OS_COMMON_FLAGS_SPMC_AT_EL_$(SPMC_AT_EL))
@@ -365,24 +379,13 @@ $(ROOTFS_UGZ): u-boot buildroot | $(BINARIES_PATH)
 ################################################################################
 # XEN
 ################################################################################
-.PHONY: xen
-$(XEN_PATH)/xen/.config:
-	$(MAKE) -C $(XEN_PATH)/xen XEN_TARGET_ARCH=arm64 defconfig
-	cd $(XEN_PATH)/xen && \
-	tools/kconfig/merge_config.sh -m .config $(ROOT)/build/kconfigs/xen.conf
-
-xen: $(XEN_PATH)/xen/.config
-	$(MAKE) -C $(XEN_PATH) dist-xen \
-	XEN_TARGET_ARCH=arm64 \
-	CONFIG_XEN_INSTALL_SUFFIX=.gz	\
-	CROSS_COMPILE="$(CCACHE)$(AARCH64_CROSS_COMPILE)"
 
 XEN_TMP ?= $(BINARIES_PATH)/xen_files
 
 $(XEN_TMP):
 	mkdir -p $@
 
-xen-create-image: xen linux buildroot | $(XEN_TMP)
+xen-create-image: linux buildroot | $(XEN_TMP)
 	cp $(KERNEL_IMAGE) $(XEN_TMP)
 	cp $(XEN_IMAGE) $(XEN_TMP)
 	cp $(XEN_CFG) $(XEN_TMP)
@@ -390,21 +393,6 @@ xen-create-image: xen linux buildroot | $(XEN_TMP)
 	rm -f $(XEN_EXT4)
 	mke2fs -t ext4 -d $(XEN_TMP) $(XEN_EXT4) 100M
 
-xen-clean:
-	$(MAKE) -C $(XEN_PATH) clean
-
-# Make sure Xen and Xen tools have the same major.minor version or things are likely to break
-ifeq ($(XEN_BOOT),y)
-xen-br = $(ROOT)/buildroot/package/xen/xen.mk
-xen-xen = $(ROOT)/xen/xen/Makefile
-xen-version-br = $(shell sed -E -n 's/^XEN_VERSION = ([0-9]+.[0-9]+).*/\1/p' $(xen-br))
-xen-version-major-xen = $(shell sed -E -n 's/export XEN_VERSION *= ([0-9]+).*/\1/p' $(xen-xen))
-xen-version-minor-xen = $(shell sed -E -n 's/export XEN_SUBVERSION *= ([0-9]+).*/\1/p' $(xen-xen))
-xen-version-xen = $(xen-version-major-xen).$(xen-version-minor-xen)
-ifneq ($(xen-version-br),$(xen-version-xen))
-$(error Xen version mismatch: $(xen-version-br) [in $(xen-br)] != $(xen-version-xen) [in $(xen-xen)])
-endif
-endif
 
 ################################################################################
 # Run targets
@@ -423,10 +411,16 @@ QEMU_VIRT	= true
 QEMU_XEN	?= -drive if=none,file=$(XEN_EXT4),format=raw,id=hd1 \
 		   -device virtio-blk-device,drive=hd1
 else
-QEMU_CPU	?= max,sve=off
+QEMU_CPU	?= max,pauth-impdef=on
 QEMU_SMP 	?= 2
 QEMU_MEM 	?= 1057
 QEMU_VIRT	= false
+endif
+
+ifeq ($(MEMTAG),y)
+QEMU_MTE	= on
+else
+QEMU_MTE	= off
 endif
 
 .PHONY: run-only
@@ -441,7 +435,7 @@ run-only:
 		-nographic \
 		-serial tcp:localhost:54320 -serial tcp:localhost:54321 \
 		-smp $(QEMU_SMP) \
-		-s -S -machine virt,secure=on,gic-version=$(QEMU_GIC_VERSION),virtualization=$(QEMU_VIRT) \
+		-s -S -machine virt,secure=on,mte=$(QEMU_MTE),gic-version=$(QEMU_GIC_VERSION),virtualization=$(QEMU_VIRT) \
 		-cpu $(QEMU_CPU) \
 		-d unimp -semihosting-config enable=on,target=native \
 		-m $(QEMU_MEM) \
@@ -462,12 +456,16 @@ endif
 ifneq ($(CHECK_TESTS),)
 check-args += --tests $(CHECK_TESTS)
 endif
+ifneq ($(XTEST_ARGS),)
+check-args += --xtest-args "$(XTEST_ARGS)"
+endif
 
 check: $(CHECK_DEPS)
 	ln -sf $(ROOT)/out-br/images/rootfs.cpio.gz $(BINARIES_PATH)/
 	cd $(BINARIES_PATH) && \
 		export QEMU=$(QEMU_BUILD)/aarch64-softmmu/qemu-system-aarch64 && \
 		export QEMU_SMP=$(QEMU_SMP) && \
+		export QEMU_MTE=$(QEMU_MTE) && \
 		export QEMU_GIC=$(QEMU_GIC_VERSION) && \
 		export QEMU_MEM=$(QEMU_MEM) && \
 		export QEMU_CPU=$(QEMU_CPU) && \
@@ -489,6 +487,7 @@ check-rust: $(CHECK_DEPS)
 	cd $(BINARIES_PATH) && \
 		export QEMU=$(QEMU_BUILD)/aarch64-softmmu/qemu-system-aarch64 && \
 		export QEMU_SMP=$(QEMU_SMP) && \
+		export QEMU_MTE=$(QEMU_MTE) && \
 		export QEMU_GIC=$(QEMU_GIC_VERSION) && \
 		export QEMU_MEM=$(QEMU_MEM) && \
 		expect $(ROOT)/optee_rust/ci/qemu-check.exp -- $(check-args) || \

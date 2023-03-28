@@ -274,7 +274,10 @@ endif
 endif
 
 ifeq ($(XEN_BOOT),y)
-DEFCONFIG_XEN_TOOLS=--br-defconfig build/br-ext/configs/xen_tools.conf
+DEFCONFIG_XEN=--br-defconfig build/br-ext/configs/xen.conf
+# The version of Xen provided by Buildroot needs a few patches to work with
+# OP-TEE
+BR2_GLOBAL_PATCH_DIR=../build/br-ext/patches
 endif
 
 BR2_PER_PACKAGE_DIRECTORIES ?= y
@@ -293,7 +296,7 @@ ifeq ($(OPTEE_RUST_ENABLE),y)
 BR2_PACKAGE_OPTEE_RUST_EXAMPLES_EXT ?= y
 BR2_PACKAGE_OPTEE_RUST_EXAMPLES_EXT_CROSS_COMPILE ?= $(CROSS_COMPILE_S_USER)
 BR2_PACKAGE_OPTEE_RUST_EXAMPLES_EXT_SITE ?= $(OPTEE_RUST_PATH)
-BR2_PACKAGE_OPTEE_RUST_EXAMPLES_TC_PATH_ENV = $(PATH):$(ROOT)/toolchains/aarch64/bin:$(HOME)/.cargo/bin
+BR2_PACKAGE_OPTEE_RUST_EXAMPLES_TC_PATH_ENV = $(ROOT)/toolchains/aarch64/bin:$(HOME)/.cargo/bin:$(PATH)
 endif
 # The OPTEE_OS package builds nothing, it just installs files into the
 # root FS when applicable (for example: shared libraries)
@@ -329,6 +332,10 @@ append-var_ = echo '$(1)=$(3)'$($(1))'$(3)' >>$(2);
 append-var = $(call append-var_,$(1),$(2),$(if $(call y-or-n,$($(1))),,$(double-quote)))
 append-br2-vars = $(foreach var,$(filter BR2_%,$(.VARIABLES)),$(call append-var,$(var),$(1)))
 
+ifneq (y,$(BR2_PER_PACKAGE_DIRECTORIES))
+br-make-flags := -j1
+endif
+
 .PHONY: buildroot
 buildroot: optee-os optee-rust
 	@mkdir -p ../out-br
@@ -342,13 +349,13 @@ buildroot: optee-os optee-rust
 		--br-defconfig build/br-ext/configs/optee_generic \
 		--br-defconfig build/br-ext/configs/$(BUILDROOT_TOOLCHAIN) \
 		$(DEFCONFIG_GDBSERVER) \
-		$(DEFCONFIG_XEN_TOOLS) \
+		$(DEFCONFIG_XEN) \
 		$(DEFCONFIG_TSS) \
 		$(DEFCONFIG_TPM_MODULE) \
 		$(DEFCONFIG_FTPM) \
 		--br-defconfig out-br/extra.conf \
 		--make-cmd $(MAKE))
-	@$(MAKE) -C ../out-br all
+	@$(MAKE) $(br-make-flags) -C ../out-br all
 
 .PHONY: buildroot-clean
 buildroot-clean:
@@ -373,7 +380,7 @@ buildroot-domu: optee-os
 		$(DEFCONFIG_GDBSERVER) \
 		--br-defconfig out-br-domu/extra.conf \
 		--make-cmd $(MAKE))
-	@$(MAKE) -C ../out-br-domu all
+	@$(MAKE) $(br-make-flags) -C ../out-br-domu all
 
 .PHONY: buildroot-domu-clean
 buildroot-domu-clean:
@@ -486,7 +493,7 @@ xterm := $(shell command -v xterm 2>/dev/null)
 ifdef gnome-terminal
 define launch-terminal
 	@nc -z  127.0.0.1 $(1) || \
-	$(gnome-terminal) -x $(BUILD_PATH)/soc_term.py $(1) &
+	$(gnome-terminal) -t $(2) -x $(BUILD_PATH)/soc_term.py $(1) &
 endef
 else
 ifdef xterm
@@ -531,10 +538,17 @@ optee-os-clean-common:
 # OP-TEE Rust
 ################################################################################
 .PHONY: optee-rust
-optee-rust:
+optee-rust: $(OPTEE_RUST_PATH)/.done
+
+$(OPTEE_RUST_PATH)/.done:
 ifeq ($(OPTEE_RUST_ENABLE),y)
-	@(cd $(OPTEE_RUST_PATH) && ./setup.sh)
+	@(export OPTEE_DIR=$(ROOT) && \
+	  export CARGO_NET_GIT_FETCH_WITH_CLI=true && \
+	  cd $(OPTEE_RUST_PATH) && ./setup.sh && touch .done)
 endif
+
+optee-rust-clean:
+	rm -f $(OPTEE_RUST_PATH)/.done
 
 ################################################################################
 # fTPM Rules
@@ -552,14 +566,14 @@ FTPM_FLAGS ?= 						\
 
 .PHONY: ftpm
 ftpm:
-ifeq ($(MEASURED_BOOT),y)
+ifeq ($(MEASURED_BOOT_FTPM),y)
 ftpm: optee-os
 	$(FTPM_FLAGS) $(MAKE) -C $(FTPM_PATH)
 endif
 
 .PHONY: ftpm-clean
 ftpm-clean:
-ifeq ($(MEASURED_BOOT),y)
+ifeq ($(MEASURED_BOOT_FTPM),y)
 ftpm-clean:
 	-$(FTPM_FLAGS) $(MAKE) -C $(FTPM_PATH) clean
 endif
