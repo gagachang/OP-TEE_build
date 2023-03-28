@@ -1,0 +1,7 @@
+enable_uart=1
+enable_gic=1
+kernel_address=0x00200000
+device_tree_address=0x26000000
+armstub=armstub8.bin
+arm_64bit=1
+arm_boost=1
